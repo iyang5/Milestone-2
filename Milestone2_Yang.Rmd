@@ -3,24 +3,50 @@ title: "The Maternal Newborn Oral Microbiome"
 author: "Irene Yang"
 date: "3/28/2018"
 output:
-  word_document: default
-  pdf_document: default
   html_document: default
+  pdf_document: default
+  word_document: default
 ---
 
 ```{r setup chunk 0, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Purpose: The purpose of this final project is to replicate analysis of 16SrRNA sequence data from a recently completed pilot study.
+Purpose: The purpose of this final project is to replicate analysis of 16SrRNA sequence data from a recently completed pilot study. The initial analysis was completed using the MOTHUR platform. I will attempt to replicate the analysis by using an R-based workflow modeled on the one presented in class which is based on the method introduced by Callahan and colleagues (2017)
 
-## Note:  The raw fastq files that support this project can be found within the secure Emory Box location at:  https://emory.app.box.com/folder/48209374654
+This milestone demonstrates that I have acquired and begun the exploration of my dataset. I am, at this point, on target with the timeline I set out in Milestone 1.
 
-# Step 1:  Processing fastq files to come up with OTU table.
+Weekly Goal Task                                        Status
+----------- ----                                        ------
+By 2/21     Install qiime2                              Using R-based workflow
+By 3/7      Demultiplexing and sequence quality control Complete
+By 3/14     FeatureTable and FeatureData summaries      Complete
+By 3/21     Diversity analyses                          Complete
+By 3/28     Milestone 2 Assignment
+By 4/7      Complete Taxonomic analysis
+By 4/14     Differential abundance testing 
+By 4/21     Trouble shoot analyses
+By 4/28     Manuscript and presentation prep
+By 5/2      Final Project due
+
+*A few notes:*
+
+1. The raw fastq files that support this project can be found within the secure Emory Box location at:  https://emory.app.box.com/folder/48209374654
+
+2. I did decide to change my workflow from a qiime2 platform to an R-based platform. This seemed logical since this was what we went over in class and because the advanced visualization with qiime2 requires use of R anyway.
+
+3. I do have a few questions about my results so far, which I will be working to address:
+  + Determine if merge paired reads are adequate
+  + Identify the reason for 0 bimeras.
+  
+4. I will complete my taxonomic analysis and attempt some basic differential abundance testing before the final due date.
+  
+
+## Step 1:  Processing fastq files to come up with OTU table.
 
 ### Load packages
 
-```{r, warning=FALSE, message=FALSE}
+```{r, warning=FALSE,message=FALSE}
 
 library(dada2); packageVersion("dada2")
 library(ShortRead); packageVersion("ShortRead")
@@ -32,11 +58,12 @@ library(ggplot2); packageVersion("ggplot2")
 
 ```{r}
 
-# Set the path to the data files
+# Set the path to the sequence data files
 
 path <- "~/Desktop/N741/2018Week7/AWHONN Fastq Files"
 fileNames <- list.files(path)
-fileNames
+
+# Listing of filenames omitted to save space in rmarkdown
 ```
 
 ### Read in sample names
@@ -79,7 +106,7 @@ Typical filtering parameters were used:
 - `truncQ = 2` -- truncate reads at the first instance of a quality less than or equal to \code{truncQ}#.
 - `maxEE` = 2 -- sets the maximum number of expected errors allowed in a read, which is a better filter than simply averaging quality scores.
 
-Note: Decision made to trim forward reads at 180 and reverse reads at 160.  Overlap between forward and reverse reads was ensured. 
+Note: Decision made to trim conservatively given the robustness of dada2 to lower quality sequences. Trimmed at 200 (forward) and 190 (reverse).  Overlap between forward and reverse reads was ensured. 
 
 ```{r}
 
@@ -104,10 +131,14 @@ head(out)
 
 ### Learn the Error Rates
 
-```{r}
+```{r, results="hide"}
 
 errF <- learnErrors(filtFs, multithread = TRUE)
 errR <- learnErrors(filtRs, multithread = TRUE)
+
+```
+
+```{r}
 
 # Visualize the estimated error rates by plotting the forward and reverse reads
 
@@ -119,12 +150,12 @@ plotErrors(errR, nominalQ = TRUE)
 
 ### Dereplication
 
-```{r}
+```{r, results="hide"}
 
 # Dereplicate
 
-derepFs <- derepFastq(filtFs, verbose=TRUE)
-derepRs <- derepFastq(filtRs, verbose=TRUE)
+derepFs <- derepFastq(filtFs, verbose=FALSE)
+derepRs <- derepFastq(filtRs, verbose=FALSE)
 
 # Name the derep-class objects by the sample names
 
@@ -137,7 +168,7 @@ names(derepRs) <- sample.names
 
 Infer the sequence variants in each sample (second dada pass)
 
-```{r}
+```{r, results="hide"}
 
 # First with the Forward reads
 
@@ -146,6 +177,10 @@ dadaFs <- dada(derepFs, err = errF, multithread = TRUE)
 # Then with the Reverse reads
 
 dadaRs <- dada(derepRs, err = errR, multithread = TRUE)
+
+```
+
+```{r}
 
 # Inspect the dada-class objects returned by the dada function
 
@@ -164,7 +199,11 @@ We can eliminate further spurious sequence variants by merging overlapping reads
 
 # Merge the denoised forward and reverse reads
 
-mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose = TRUE )
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose = FALSE )
+
+```
+
+```{r}
 
 # Inspect the merged data.frame from the first sample
 
@@ -233,10 +272,12 @@ GreenGenes 13_8 reference will be used.
 set.seed(100)
 getwd()
 path
-list.files(path)
+
+# list.files omitted to save space on rmarkdown
 
 taxa <- assignTaxonomy(seqtab.nochim, "~/Desktop/N741/2018Week7/AWHONN Fastq Files/gg_13_8_train_set_97.fa", multithread = TRUE)
 unname(head(taxa))
+
 ```
 
 Inspect the taxonomic assignments:
@@ -250,7 +291,7 @@ head(taxa.print)
 
 ### Construct a Phylogenetic Tree
 
-```{r}
+```{r, results="hide"}
 
 library(DECIPHER)
 seqs <- getSequences(seqtab.nochim)
@@ -311,11 +352,12 @@ ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),
 # Describe it
 
 ps
+
 ```
 
 ### Diversity in Microbial Ecology
 
-```{r}
+```{r, results="hide"}
 
 # Plot alpha-diversity
 
@@ -328,11 +370,16 @@ plot_richness(ps, x="Groups", measures = c("Shannon"))
 
 Using the Bray-Curtis dissimilarity index.
 
-```{r}
+```{r, results="hide"}
 
 # Ordinate with Bray-Curtis
 
 ord.nmds.bray <- ordinate(ps, method="NMDS", distance="bray")
+
+```
+
+```{r}
+
 plot_ordination(ps, ord.nmds.bray, color="Groups", title="Bray NMDS")
 
 ```
@@ -348,10 +395,16 @@ top20 <- names(sort(taxa_sums(ps), decreasing = TRUE))[1:20]
 ps.top20 <- transform_sample_counts(ps, function(OTU) OTU/sum(OTU))
 ps.top20 <- prune_taxa(top20, ps.top20)
 plot_bar(ps.top20, x="Groups", fill="Phylum")
+
 ```
 
 ```{r}
 # Plot richness
 
 plot_richness(ps, "Groups", "Sample_Type")
+
 ```
+
+### References
+
+Callahan, B. J., Sankaran, K., Fukuyama, J. A., McMurdie, P. J., & Holmes, S. P. (2017). Bioconductor workflow for microbiome data analysis: From raw reads to community analyses. Retrieved from: https://bioconductor.org/help/course-materials/2017/BioC2017/Day1/Workshops/Microbiome/MicrobiomeWorkflowII.html#references
