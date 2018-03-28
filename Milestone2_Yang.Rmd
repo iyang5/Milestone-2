@@ -1,0 +1,349 @@
+---
+title: "The Maternal Newborn Oral Microbiome"
+author: "Irene Yang"
+date: "3/28/2018"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup chunk 0, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Note:  The raw fastq files that support this project can be found within the secure Emory Box location at:  https://emory.app.box.com/folder/48209374654
+
+# Step 1:  Processing fastq files to come up with OTU table.
+
+### Load packages
+
+```{r}
+
+library(dada2); packageVersion("dada2")
+library(ShortRead); packageVersion("ShortRead")
+library(phyloseq); packageVersion("phyloseq")
+library(ggplot2); packageVersion("ggplot2")
+```
+
+### Change the path in the next chunk to where your files sit.
+
+```{r}
+
+# Set the path to the data files
+
+path <- "~/Desktop/N741/2018Week7/AWHONN Fastq Files"
+fileNames <- list.files(path)
+fileNames
+```
+
+### Read in sample names
+
+Using the `dada2` pipeline, first read in the names of the .fastq files. Then manipulate those names as character variables, using regular expressions to create lists of the forward and reverse read .fastq files in *matched* order.
+
+```{r}
+
+# Forward and reverse fastq filenames should have format: SAMPLENAME_R1_001.fastq and SAMPLENAME_R2_001.fastq
+
+# Start by reading in the names of the .fastq files
+
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq", full.names=TRUE))
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq", full.names=TRUE))
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+
+sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+
+```
+
+### Generate Quality Profiles of the reads
+
+```{r}
+
+# Visualize the quality profile of the first two files containing forward reads
+
+plotQualityProfile(fnFs[1:2])
+
+# Visualize the quality profile of the first two files containing reverse reads
+
+plotQualityProfile(fnRs[1:2])
+
+```
+
+### Filter and Trim
+
+Typical filtering parameters were used:  
+- `maxN = 0` -- `dada2` requires that there be no N's in a sequence
+- `truncQ = 2` -- truncate reads at the first instance of a quality less than or equal to \code{truncQ}#.
+- `maxEE` = 2 -- sets the maximum number of expected errors allowed in a read, which is a better filter than simply averaging quality scores.
+
+Note: Decision made to trim forward reads at 180 and reverse reads at 160.  Overlap between forward and reverse reads was ensured. 
+
+```{r}
+
+# Make a directory and filenames for the filtered fastqs
+ 
+# Place filtered files in a filtered/ subdirectory
+
+filt.path <- file.path(path, "filtered")
+if(!file_test("-d", filt.path)) dir.create(filt.path)
+filtFs <- file.path(filt.path, paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(filt.path, paste0(sample.names, "_R_file.fastq.gz"))
+
+# Filter the forward and reverse reads
+
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen = c(180, 160),
+                     maxN=0, maxEE =c(2,2), truncQ = 2, rm.phix = TRUE,
+                     compress=TRUE, multithread=TRUE) 
+
+head(out)
+
+```
+
+### Learn the Error Rates
+
+```{r}
+
+errF <- learnErrors(filtFs, multithread = TRUE)
+errR <- learnErrors(filtRs, multithread = TRUE)
+
+# Visualize the estimated error rates by plotting the forward and reverse reads
+
+plotErrors(errF, nominalQ=TRUE)
+
+plotErrors(errR, nominalQ = TRUE)
+
+```
+
+### Dereplication
+
+```{r}
+
+# Dereplicate
+
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+
+# Name the derep-class objects by the sample names
+
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+
+```
+
+### Sample Inference
+
+Infer the sequence variants in each sample (second dada pass)
+
+```{r}
+
+# First with the Forward reads
+
+dadaFs <- dada(derepFs, err = errF, multithread = TRUE)
+
+# Then with the Reverse reads
+
+dadaRs <- dada(derepRs, err = errR, multithread = TRUE)
+
+# Inspect the dada-class objects returned by the dada function
+
+dadaFs[[1]]
+dadaRs[[1]]
+
+```
+
+We can see that the algorithm has inferred 6 unique sequence variants from the forward reads and 8 from the reverse reads.
+
+### Merge Paired Reads
+
+We can eliminate further spurious sequence variants by merging overlapping reads. The core function is `mergePairs` and it depends on the forward and reverse reads being in matching order at the time they were dereplicated.
+
+```{r}
+
+# Merge the denoised forward and reverse reads
+
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose = TRUE )
+
+# Inspect the merged data.frame from the first sample
+
+head(mergers[[1]])
+
+```
+
+### Sequence Table Construction
+
+We will now construct the sequence table, this being analogous to the "OTU table" produced by other methods.
+
+```{r}
+
+# Construct sequence table
+
+seqtab <- makeSequenceTable(mergers)
+
+# Consider the table
+
+dim(seqtab)
+class(seqtab)
+
+# Inspect the distribution of sequence lengths
+
+table(nchar(getSequences(seqtab)))
+
+```
+
+### Remove Chimeras
+
+```{r}
+
+# Remove chimeric sequences
+
+seqtab.nochim <- removeBimeraDenovo(seqtab, method = "consensus", multithread = TRUE, verbose=TRUE)
+
+dim(seqtab.nochim)
+
+sum(seqtab.nochim)/sum(seqtab)
+
+```
+
+### Track Reads through the Pipeline
+
+```{r}
+
+getN <- function(x) sum(getUniques(x))
+pctSurv <- rowSums(seqtab.nochim)*100/out[,1]
+track <- cbind(out, sapply(dadaFs, getN), sapply(mergers, getN), rowSums(seqtab), rowSums(seqtab.nochim), pctSurv)
+colnames(track) <- c("input", "filtered", "denoised", "merged", "tabled", "nonchimeric", "% passing")
+rownames(track) <- sample.names
+head(track)
+
+```
+
+### Assign Taxonomy
+
+GreenGenes 13_8 reference will be used.
+
+```{r}
+
+# Assign taxonomy
+
+# First initialize random number generator for reproducibility
+
+set.seed(100)
+getwd()
+path
+list.files(path)
+
+taxa <- assignTaxonomy(seqtab.nochim, "~/Desktop/N741/2018Week7/AWHONN Fastq Files/gg_13_8_train_set_97.fa", multithread = TRUE)
+unname(head(taxa))
+```
+
+Inspect the taxonomic assignments:
+
+```{r}
+
+taxa.print <- taxa #Removing sequence rownames for display only
+rownames (taxa.print) <- NULL
+head(taxa.print)
+```
+
+### Construct a Phylogenetic Tree
+
+```{r}
+
+library(DECIPHER)
+seqs <- getSequences(seqtab.nochim)
+
+# This next command will allow propagation of sequence names to the tip labels of the tree
+names(seqs) <- seqs
+alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA)
+
+# Construct tree
+
+library(phangorn)
+
+phang.align <- phyDat(as(alignment, "matrix"), type="DNA")
+dm <- dist.ml(phang.align)
+treeNJ <- NJ(dm) # Tip order will not equal sequence order
+fit <- pml(treeNJ, data=phang.align)
+
+## negative edges length changed to 0.
+
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE, 
+                    rearrangement = "stochastic", control=pml.control(trace=0))
+detach("package:phangorn", unload=TRUE)
+
+```
+
+### Handoff to `phyloseq`
+
+Our next activity will be to hand off the data to the `phyloseq` package for analysis. This package requires three items: the "OTUtable," the taxonomy table, and data about the samples. The first two items are directly available at the end of your `dada2`run, and you can import the latter as a .csv file. 
+
+```{r}
+
+# Import metadata file.
+
+samdf <- read.csv("~/Desktop/N741/2018Week7/Metadata.csv",header=TRUE)
+
+rownames(samdf) <- samdf$Sample_ID
+
+rownames(samdf)
+
+rownames(seqtab.nochim)
+
+```
+
+Create the phyloseq object.
+
+```{r}
+
+library(phyloseq)
+
+# Create phyloseq object
+
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(samdf),
+               tax_table(taxa),
+               phy_tree(fitGTR$tree))
+
+# Describe it
+
+ps
+```
+
+### Diversity in Microbial Ecology
+
+```{r}
+
+# Plot alpha-diversity
+
+plot_richness(ps, x="Groups", measures = c("Shannon"))
+        theme_bw()
+        
+```
+
+### Ordinate
+
+Using the Bray-Curtis dissimilarity index.
+
+```{r}
+
+# Ordinate with Bray-Curtis
+
+ord.nmds.bray <- ordinate(ps, method="NMDS", distance="bray")
+plot_ordination(ps, ord.nmds.bray, color="Groups", title="Bray NMDS")
+
+```
+
+We see that ordination picks out a separation between maternal and newborn samples.
+
+### Bar Plots   
+
+```{r}
+# Create bar plots for top 20 OTUs
+
+top20 <- names(sort(taxa_sums(ps), decreasing = TRUE))[1:20]
+ps.top20 <- transform_sample_counts(ps, function(OTU) OTU/sum(OTU))
+ps.top20 <- prune_taxa(top20, ps.top20)
+plot_bar(ps.top20, x="Groups", fill="Phylum")
+```
